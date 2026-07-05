@@ -1,0 +1,22 @@
+name: Trigger IaC Smith
+
+on:
+  issues:
+    types: [labeled]
+
+# Requires IAC_SMITH_CONTROLLER_PAT secret in this repo:
+# a fine-grained PAT scoped to time4116/iac-smith with Actions: write permission.
+
+jobs:
+  trigger:
+    if: github.event.label.name == 'iac-smith' && github.actor == 'time4116'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch to IaC Smith
+        env:
+          GH_TOKEN: ${{ secrets.IAC_SMITH_CONTROLLER_PAT }}
+        run: |
+          gh workflow run issue-to-pr.yml \
+            --repo time4116/iac-smith \
+            --field issue_number=${{ github.event.issue.number }} \
+            --field source_repo=${{ github.repository }}
