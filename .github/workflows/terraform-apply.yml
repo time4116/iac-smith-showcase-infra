@@ -29,7 +29,7 @@ jobs:
         env:
           BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
-          WORKLOAD_STACKS: ""
+          WORKLOAD_STACKS: "ecs-fargate-nginx"
         run: |
           set -euo pipefail
           if [ -z "${BEFORE:-}" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
@@ -44,8 +44,6 @@ jobs:
           root=false
           if changed '^bootstrap/'; then bootstrap=true; fi
           if changed '^environments/terragrunt\.hcl$' || changed '^environments/[^/]+/terragrunt\.hcl$'; then root=true; fi
-          if changed '^modules/vpc-foundation/' || changed '^environments/[^/]+/vpc-foundation/'; then foundation=true; fi
-          if [ "$root" = true ]; then foundation=true; fi
           stack_args=()
           for s in ${WORKLOAD_STACKS}; do
             if [ "$root" = true ] || changed "^modules/${s}/" || changed "^environments/[^/]+/${s}/"; then
@@ -102,11 +100,15 @@ jobs:
           terraform plan -out=tfplan
           terraform apply -auto-approve tfplan
 
-  apply-foundation:
-    name: Apply — non-prod/vpc-foundation
+  apply-workloads:
+    name: Apply — non-prod/${{ matrix.stack }}
     needs: [detect, gate, bootstrap]
-    if: ${{ always() && needs.gate.result == 'success' && needs.detect.outputs.foundation == 'true' && needs.bootstrap.result != 'failure' && needs.bootstrap.result != 'cancelled' }}
+    if: ${{ always() && needs.gate.result == 'success' && needs.detect.outputs.stacks != '[]' && needs.bootstrap.result != 'failure' && needs.bootstrap.result != 'cancelled' }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJson(needs.detect.outputs.stacks) }}
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
@@ -123,9 +125,9 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN_NON_PROD }}
           aws-region: us-west-2
           mask-aws-account-id: true
-      - name: Plan vpc-foundation
-        working-directory: environments/non-prod/vpc-foundation
+      - name: Plan ${{ matrix.stack }}
+        working-directory: environments/non-prod/${{ matrix.stack }}
         run: terragrunt plan --non-interactive -lock-timeout=20m -out=tfplan
-      - name: Apply vpc-foundation
-        working-directory: environments/non-prod/vpc-foundation
+      - name: Apply ${{ matrix.stack }}
+        working-directory: environments/non-prod/${{ matrix.stack }}
         run: terragrunt apply --non-interactive tfplan
