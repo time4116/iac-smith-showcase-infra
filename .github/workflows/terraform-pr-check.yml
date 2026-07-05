@@ -22,6 +22,11 @@ jobs:
         run: |
           terraform init -backend=false -input=false
           terraform validate
+      - name: Terraform init and validate — modules/kinesis-firehose-s3-pipeline
+        working-directory: modules/kinesis-firehose-s3-pipeline
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
       - name: Terraform init and validate — modules/vpc-foundation
         working-directory: modules/vpc-foundation
         run: |
