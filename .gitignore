@@ -1,0 +1,18 @@
+# Terraform
+.terraform/
+.terragrunt-cache/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# The dependency lock file is committed on purpose — do not ignore it:
+# .terraform.lock.hcl
+*.tfplan
+tfplan.binary

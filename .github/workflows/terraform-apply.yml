@@ -1,0 +1,131 @@
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "environments/**"
+      - "modules/**"
+      - "bootstrap/**"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  detect:
+    name: Detect changed components
+    runs-on: ubuntu-latest
+    outputs:
+      any: ${{ steps.scan.outputs.any }}
+      bootstrap: ${{ steps.scan.outputs.bootstrap }}
+      foundation: ${{ steps.scan.outputs.foundation }}
+      stacks: ${{ steps.scan.outputs.stacks }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan changed paths
+        id: scan
+        env:
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+          WORKLOAD_STACKS: ""
+        run: |
+          set -euo pipefail
+          if [ -z "${BEFORE:-}" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            CHANGED=$(git ls-files environments modules bootstrap)
+          else
+            CHANGED=$(git diff --name-only "$BEFORE" "$SHA")
+          fi
+          printf 'Changed files:\n%s\n' "$CHANGED"
+          changed() { grep -qE "$1" <<< "$CHANGED"; }
+          bootstrap=false
+          foundation=false
+          root=false
+          if changed '^bootstrap/'; then bootstrap=true; fi
+          if changed '^environments/terragrunt\.hcl$' || changed '^environments/[^/]+/terragrunt\.hcl$'; then root=true; fi
+          if changed '^modules/vpc-foundation/' || changed '^environments/[^/]+/vpc-foundation/'; then foundation=true; fi
+          if [ "$root" = true ]; then foundation=true; fi
+          stack_args=()
+          for s in ${WORKLOAD_STACKS}; do
+            if [ "$root" = true ] || changed "^modules/${s}/" || changed "^environments/[^/]+/${s}/"; then
+              stack_args+=("$s")
+            fi
+          done
+          if [ ${#stack_args[@]} -eq 0 ]; then
+            stacks="[]"
+          else
+            stacks=$(printf '%s\n' "${stack_args[@]}" | python3 -c "import sys,json; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))")
+          fi
+          any=false
+          if [ "$bootstrap" = true ] || [ "$foundation" = true ] || [ "$stacks" != "[]" ]; then any=true; fi
+          {
+            echo "bootstrap=$bootstrap"
+            echo "foundation=$foundation"
+            echo "stacks=$stacks"
+            echo "any=$any"
+          } >> "$GITHUB_OUTPUT"
+
+  gate:
+    name: Approve apply
+    needs: detect
+    if: ${{ needs.detect.outputs.any == 'true' }}
+    runs-on: ubuntu-latest
+    environment: non-prod
+    steps:
+      - run: echo "Approved — applying only the changed components."
+
+  bootstrap:
+    name: Bootstrap state backend
+    needs: [detect, gate]
+    if: ${{ always() && needs.gate.result == 'success' && needs.detect.outputs.bootstrap == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_NON_PROD }}
+          aws-region: us-west-2
+          mask-aws-account-id: true
+      - name: Bootstrap state backend (idempotent)
+        working-directory: bootstrap/backend/non-prod
+        run: |
+          terraform init
+          BUCKET=$(python3 -c "import re; txt=open('variables.tf').read(); m=re.search(r'variable\s+\"state_bucket_name\".*?default\s*=\s*\"([^\"]+)\"', txt, re.DOTALL); print(m.group(1) if m else '')")
+          TABLE=$(python3 -c "import re; txt=open('variables.tf').read(); m=re.search(r'variable\s+\"state_lock_table_name\".*?default\s*=\s*\"([^\"]+)\"', txt, re.DOTALL); print(m.group(1) if m else '')")
+          terraform import aws_s3_bucket.terraform_state "$BUCKET" 2>/dev/null || true
+          terraform import aws_dynamodb_table.terraform_locks "$TABLE" 2>/dev/null || true
+          terraform plan -out=tfplan
+          terraform apply -auto-approve tfplan
+
+  apply-foundation:
+    name: Apply — non-prod/vpc-foundation
+    needs: [detect, gate, bootstrap]
+    if: ${{ always() && needs.gate.result == 'success' && needs.detect.outputs.foundation == 'true' && needs.bootstrap.result != 'failure' && needs.bootstrap.result != 'cancelled' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Install terragrunt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TG_VERSION=$(curl -sL -H "Authorization: Bearer ${GH_TOKEN}" "https://api.github.com/repos/gruntwork-io/terragrunt/releases/latest" | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])")
+          curl -sL "https://github.com/gruntwork-io/terragrunt/releases/download/${TG_VERSION}/terragrunt_linux_amd64" -o /usr/local/bin/terragrunt
+          chmod +x /usr/local/bin/terragrunt
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_NON_PROD }}
+          aws-region: us-west-2
+          mask-aws-account-id: true
+      - name: Plan vpc-foundation
+        working-directory: environments/non-prod/vpc-foundation
+        run: terragrunt plan --non-interactive -lock-timeout=20m -out=tfplan
+      - name: Apply vpc-foundation
+        working-directory: environments/non-prod/vpc-foundation
+        run: terragrunt apply --non-interactive tfplan
