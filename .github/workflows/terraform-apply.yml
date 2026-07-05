@@ -29,7 +29,7 @@ jobs:
         env:
           BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
-          WORKLOAD_STACKS: ""
+          WORKLOAD_STACKS: "ecs-fargate-nginx"
         run: |
           set -euo pipefail
           if [ -z "${BEFORE:-}" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
@@ -128,4 +128,36 @@ jobs:
         run: terragrunt plan --non-interactive -lock-timeout=20m -out=tfplan
       - name: Apply vpc-foundation
         working-directory: environments/non-prod/vpc-foundation
+        run: terragrunt apply --non-interactive tfplan
+
+  apply-workloads:
+    name: Apply — non-prod/${{ matrix.stack }}
+    needs: [detect, gate, apply-foundation]
+    if: ${{ always() && needs.gate.result == 'success' && needs.detect.outputs.stacks != '[]' && needs['apply-foundation'].result != 'failure' && needs['apply-foundation'].result != 'cancelled' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJson(needs.detect.outputs.stacks) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Install terragrunt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TG_VERSION=$(curl -sL -H "Authorization: Bearer ${GH_TOKEN}" "https://api.github.com/repos/gruntwork-io/terragrunt/releases/latest" | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])")
+          curl -sL "https://github.com/gruntwork-io/terragrunt/releases/download/${TG_VERSION}/terragrunt_linux_amd64" -o /usr/local/bin/terragrunt
+          chmod +x /usr/local/bin/terragrunt
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_NON_PROD }}
+          aws-region: us-west-2
+          mask-aws-account-id: true
+      - name: Plan ${{ matrix.stack }}
+        working-directory: environments/non-prod/${{ matrix.stack }}
+        run: terragrunt plan --non-interactive -lock-timeout=20m -out=tfplan
+      - name: Apply ${{ matrix.stack }}
+        working-directory: environments/non-prod/${{ matrix.stack }}
         run: terragrunt apply --non-interactive tfplan
