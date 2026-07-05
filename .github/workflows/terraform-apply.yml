@@ -29,7 +29,7 @@ jobs:
         env:
           BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
-          WORKLOAD_STACKS: "ecs-fargate-nginx"
+          WORKLOAD_STACKS: "kinesis-firehose-s3-pipeline ecs-fargate-nginx"
         run: |
           set -euo pipefail
           if [ -z "${BEFORE:-}" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
