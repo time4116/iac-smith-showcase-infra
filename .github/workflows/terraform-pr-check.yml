@@ -17,6 +17,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
+      - name: Terraform init and validate — modules/ecs-fargate-nginx
+        working-directory: modules/ecs-fargate-nginx
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
       - name: Terraform init and validate — modules/vpc-foundation
         working-directory: modules/vpc-foundation
         run: |
