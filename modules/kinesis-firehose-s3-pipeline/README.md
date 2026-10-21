@@ -19,13 +19,11 @@ Declares the following resources:
 
 | Name | Type |
 |---|---|
-| `aws_region` | `string` |
 | `environment` | `string` |
-| `private_subnets` | `list(string)` |
-| `public_subnets` | `list(string)` |
-| `spec_summary` | `string` |
-| `vpc_cidr_block` | `string` |
-| `vpc_id` | `string` |
+
+The root-generated AWS provider supplies the region. This standalone module does
+not use a VPC or depend on foundation state. The delivery stream waits for its
+three IAM policies and bucket hardening resources before creation.
 
 ## Outputs
 

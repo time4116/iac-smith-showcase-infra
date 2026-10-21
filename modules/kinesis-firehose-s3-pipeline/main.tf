@@ -60,24 +60,70 @@ resource "aws_iam_role" "firehose_role" {
 }
 
 resource "aws_iam_role_policy" "firehose_kinesis_read_policy" {
-  name   = "firehose-kinesis-read"
-  role   = aws_iam_role.firehose_role.id
-  policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"kinesis:DescribeStream\",\"kinesis:GetShardIterator\",\"kinesis:GetRecords\",\"kinesis:ListRecords\",\"kinesis:ListStreams\"],\"Resource\":\"${aws_kinesis_stream.data_stream.arn}\"}]}"
+  name = "firehose-kinesis-read"
+  role = aws_iam_role.firehose_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["kinesis:DescribeStream", "kinesis:GetShardIterator", "kinesis:GetRecords"]
+      Resource = aws_kinesis_stream.data_stream.arn
+    }]
+  })
 }
 
 resource "aws_iam_role_policy" "firehose_s3_write_policy" {
-  name   = "firehose-s3-write"
-  role   = aws_iam_role.firehose_role.id
-  policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"s3:AbortMultipartUpload\",\"s3:GetBucketVersioning\",\"s3:PutObject\",\"s3:GetObject\"],\"Resource\":[\"${aws_s3_bucket.delivery_bucket.arn}\",\"${aws_s3_bucket.delivery_bucket.arn}/*\"]}]}"
+  name = "firehose-s3-write"
+  role = aws_iam_role.firehose_role.id
+  # AWS Firehose S3 destination permissions, scoped separately by resource type.
+  # https://docs.aws.amazon.com/firehose/latest/dev/controlling-access.html
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "BucketAccess"
+        Effect = "Allow"
+        Action = [
+          "s3:GetBucketLocation",
+          "s3:ListBucket",
+          "s3:ListBucketMultipartUploads",
+        ]
+        Resource = aws_s3_bucket.delivery_bucket.arn
+      },
+      {
+        Sid      = "ObjectAccess"
+        Effect   = "Allow"
+        Action   = ["s3:AbortMultipartUpload", "s3:GetObject", "s3:PutObject"]
+        Resource = "${aws_s3_bucket.delivery_bucket.arn}/*"
+      },
+    ]
+  })
 }
 
 resource "aws_iam_role_policy" "firehose_cloudwatch_logs_policy" {
-  name   = "firehose-cloudwatch-logs"
-  role   = aws_iam_role.firehose_role.id
-  policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"logs:PutLogEvents\"],\"Resource\":\"${aws_cloudwatch_log_group.firehose_log_group.arn}:*\"}]}"
+  name = "firehose-cloudwatch-logs"
+  role = aws_iam_role.firehose_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["logs:PutLogEvents"]
+      # Normalize provider ARN suffixes without granting other log streams access.
+      Resource = trimsuffix(aws_cloudwatch_log_stream.firehose_error_log_stream.arn, ":*")
+    }]
+  })
 }
 
 resource "aws_kinesis_firehose_delivery_stream" "s3_delivery_stream" {
+  depends_on = [
+    aws_iam_role_policy.firehose_kinesis_read_policy,
+    aws_iam_role_policy.firehose_s3_write_policy,
+    aws_iam_role_policy.firehose_cloudwatch_logs_policy,
+    aws_s3_bucket_versioning.delivery_bucket_versioning,
+    aws_s3_bucket_server_side_encryption_configuration.delivery_bucket_encryption,
+    aws_s3_bucket_public_access_block.delivery_bucket_public_access_block,
+  ]
+
   name        = "kinesis-firehose-s3-delivery-${var.environment}"
   destination = "extended_s3"
   tags = {
