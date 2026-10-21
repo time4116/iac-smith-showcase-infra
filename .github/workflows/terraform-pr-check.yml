@@ -6,6 +6,8 @@ on:
       - 'environments/**'
       - 'modules/**'
       - 'bootstrap/**'
+      - '.github/workflows/**'
+      - 'tests/**'
 
 permissions:
   contents: read
@@ -17,8 +19,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.5
+      - name: Offline workflow and IAM contracts
+        run: python3 -m unittest discover -s tests -v
+      - name: Terraform format
+        run: terraform fmt -check -recursive modules bootstrap
+      - name: Terraform init and validate — bootstrap/backend/non-prod
+        working-directory: bootstrap/backend/non-prod
+        run: |
+          terraform init -backend=false -input=false -lockfile=readonly
+          terraform validate
       - name: Terraform init and validate — modules/ecs-fargate-nginx
         working-directory: modules/ecs-fargate-nginx
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+      - name: Terraform init and validate — modules/kinesis-firehose-s3-pipeline
+        working-directory: modules/kinesis-firehose-s3-pipeline
         run: |
           terraform init -backend=false -input=false
           terraform validate
